@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/junkblocker/sbr/types"
 )
 
-func processFile(filePath, outPath string) {
-	fmt.Printf("Processing file: %s\n", filePath)
+func processFile(wg *sync.WaitGroup, filePath, outPath string) {
+	// fmt.Printf("Processing file: %s\n", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
 		fmt.Println("Error opening file:", err)
@@ -28,12 +29,16 @@ func processFile(filePath, outPath string) {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
+			fmt.Println("Error decoding file:", err)
 			break
 		}
 
 		switch se := token.(type) {
 		case xml.StartElement:
-			if se.Name.Local == "sms" {
+			if se.Name.Local == "calls" {
+				fmt.Println("Not an SMS backup:", filePath)
+				return
+			} else if se.Name.Local == "sms" {
 				var sms types.SMS
 				err = decoder.DecodeElement(&sms, &se)
 				if err != nil {
@@ -50,10 +55,15 @@ func processFile(filePath, outPath string) {
 				}
 				// fmt.Printf("MMS - Address: %s, Date: %s\n", mms.Address, mms.Date)
 				for _, part := range mms.Parts {
+					contentType := strings.ToLower(part.ContentType)
 					// fmt.Printf("Part Name: %s, Filename: %s\n", part.Name, part.Filename)
-						saveMMSAttachment(part, mms.Date, outPath)
-					if strings.HasPrefix(part.ContentType, "image/") || strings.HasPrefix(part.ContentType, "audio/") || strings.HasPrefix(part.ContentType, "video/") || part.ContentType == "application/pdf" || strings.ToLower(part.ContentType) == "text/v-card" || strings.ToLower(part.ContentType) == "text/vcard" || strings.ToLower(part.ContentType) == "application/octet-stream" {
-					} else if part.ContentType != "text/plain" && part.ContentType != "application/smil" {
+					if strings.HasPrefix(contentType, "image/") || strings.HasPrefix(contentType, "audio/") || strings.HasPrefix(contentType, "video/") || contentType == "application/pdf" || contentType == "text/x-vcard" || contentType == "text/v-card" || contentType == "text/vcard" || contentType == "application/octet-stream" {
+						wg.Add(1)
+						go func(apart types.MMSPart, adate, anOutPath string) {
+							defer wg.Done()
+							saveMMSAttachment(apart, adate, anOutPath)
+						}(part, mms.Date, outPath)
+					} else if contentType != "text/plain" && contentType != "application/smil" {
 						fmt.Printf("  Unknown: %s\n", part.ContentType)
 					}
 				}
@@ -136,24 +146,44 @@ func saveMMSAttachment(part types.MMSPart, date, outPath string) {
 	}
 
 	oFile := filepath.Join(outPath, filename)
-	err = os.WriteFile(oFile, data, 0644)
+	oTempfile := oFile + ".tmp"
+	oStat, err := os.Stat(oFile)
+	if err == nil {
+		if oStat != nil {
+			if oStat.IsDir() {
+				fmt.Printf("Error: Output path %s is an existing directory\n", oFile)
+				// } else {
+				// 	fmt.Printf("Output path %s already exists\n", oFile)
+			}
+			return
+		}
+	}
+	// TODO: Worry about max filename/path length here
+	err = os.WriteFile(oTempfile, data, 0644)
 	if err != nil {
 		fmt.Println("Error saving attachment:", err)
+		_ = os.Remove(oTempfile)
 		return
 	}
 
 	// Set modification time
-	err = os.Chtimes(oFile, sentTime, sentTime)
+	err = os.Chtimes(oTempfile, sentTime, sentTime)
 	if err != nil {
 		fmt.Println("Error setting file time:", err)
+		_ = os.Remove(oTempfile)
+		return
+	}
+	if err = os.Rename(oTempfile, oFile); err != nil {
+		fmt.Printf("Error renaming temporary file %s to %s: %v\n", oTempfile, oFile, err)
+		_ = os.Remove(oTempfile)
 		return
 	}
 	// absPath, _ := filepath.Abs(filename)
 	// fmt.Printf("  Attachment saved: %s\n", absPath)
 }
 
-func processDirectory(inDirPath, outDirPath string) {
-	fmt.Printf("Processing directory: %s\n", inDirPath)
+func processDirectory(wg *sync.WaitGroup, inDirPath, outDirPath string) {
+	// fmt.Printf("Processing directory: %s\n", inDirPath)
 	err := filepath.WalkDir(inDirPath, func(apath string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -161,7 +191,7 @@ func processDirectory(inDirPath, outDirPath string) {
 		fname := entry.Name()
 		if !entry.IsDir() {
 			if strings.HasPrefix(fname, "sms-") && strings.HasSuffix(fname, ".xml") {
-				processFile(apath, outDirPath)
+				processFile(wg, apath, outDirPath)
 			}
 		}
 		return nil
@@ -192,9 +222,11 @@ func main() {
 		log.Fatalf("Output path %s is not a directory\n", outPath)
 	}
 
+	var wg sync.WaitGroup
 	if inPathInfo.IsDir() {
-		processDirectory(inPath, outPath)
+		processDirectory(&wg, inPath, outPath)
 	} else {
-		processFile(inPath, outPath)
+		processFile(&wg, inPath, outPath)
 	}
+	wg.Wait()
 }
