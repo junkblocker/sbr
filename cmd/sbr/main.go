@@ -10,62 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/junkblocker/sbr/types"
 )
-
-type (
-	PhoneNumber    string
-	SMSMessageType int
-	SMSStatus      int
-	AndroidTS      string
-	BoolValue      int
-	ReadStatus     int
-	CallType       int
-)
-
-type SMS struct {
-	XMLName xml.Name    `xml:"sms"`
-	Address PhoneNumber `xml:"address,attr"`
-	Body    string      `xml:"body,attr"`
-	Date    string      `xml:"date,attr"`
-}
-
-type MMS struct {
-	XMLName           xml.Name      `xml:"mms"`
-	TextOnly          BoolValue     `xml:"text_only,attr"`
-	Read              ReadStatus    `xml:"read,attr"`
-	Date              string        `xml:"date,attr"`
-	Locked            BoolValue     `xml:"locked,attr"`
-	DateSent          AndroidTS     `xml:"date_sent,attr"`
-	ReadableDate      string        `xml:"readable_date,attr"`
-	ContactName       string        `xml:"contact_name,attr"`
-	Seen              BoolValue     `xml:"seen,attr"`
-	FromAddress       PhoneNumber   `xml:"from_address,attr"`
-	Address           PhoneNumber   `xml:"address,attr"`
-	MessageClassifier string        `xml:"m_cls,attr"`
-	MessageSize       string        `xml:"m_size,attr"`
-	Parts             []MMSPart     `xml:"parts>part"`
-	Addresses         []PhoneNumber `xml:"addrs>addr"`
-	Body              string        `xml:"body"`
-}
-
-type MMSPart struct {
-	XMLName        xml.Name `xml:"part"`
-	Data           string   `xml:"data,attr"`
-	ContentDisplay string   `xml:"cd,attr"`
-	ContentType    string   `xml:"ct,attr"`
-	Filename       string   `xml:"cl,attr"`
-	Name           string   `xml:"name,attr"`
-	Text           string   `xml:"text,attr"`
-	Type           string   `xml:"ct"`
-}
-
-// Call represents a call log entry
-type Call struct {
-	XMLName xml.Name `xml:"call"`
-	Number  string   `xml:"number"`
-	Date    string   `xml:"date"`
-	Type    int      `xml:"type"`
-}
 
 func processFile(filePath, outPath string) {
 	fmt.Printf("Processing file: %s\n", filePath)
@@ -87,7 +34,7 @@ func processFile(filePath, outPath string) {
 		switch se := token.(type) {
 		case xml.StartElement:
 			if se.Name.Local == "sms" {
-				var sms SMS
+				var sms types.SMS
 				err = decoder.DecodeElement(&sms, &se)
 				if err != nil {
 					fmt.Println("Error decoding SMS:", err)
@@ -95,7 +42,7 @@ func processFile(filePath, outPath string) {
 				}
 				// fmt.Printf("SMS - Address: %s, Date: %s, Body: %s\n", sms.Address, sms.Date, sms.Body)
 			} else if se.Name.Local == "mms" {
-				var mms MMS
+				var mms types.MMS
 				err = decoder.DecodeElement(&mms, &se)
 				if err != nil {
 					fmt.Println("Error decoding MMS:", err)
@@ -123,7 +70,7 @@ func processFile(filePath, outPath string) {
 	}
 }
 
-func saveMMSAttachment(part MMSPart, date, outPath string) {
+func saveMMSAttachment(part types.MMSPart, date, outPath string) {
 	data, err := base64.StdEncoding.DecodeString(part.Data)
 	if err != nil {
 		fmt.Println("Error decoding attachment data:", err)
