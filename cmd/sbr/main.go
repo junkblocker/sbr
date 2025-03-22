@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/xml"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -15,11 +16,15 @@ import (
 	"github.com/junkblocker/sbr/types"
 )
 
+var debugFlag = flag.Uint("d", 0, "Be more verbose")
+
 func processFile(wg *sync.WaitGroup, filePath, outPath string) {
-	// fmt.Printf("Processing file: %s\n", filePath)
+	if *debugFlag > 0 {
+		fmt.Printf("Processing file: %s\n", filePath)
+	}
 	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Println("Error opening file:", err)
+		fmt.Printf("Error opening file %s: %s\n", filePath, err)
 		return
 	}
 	defer file.Close()
@@ -29,8 +34,12 @@ func processFile(wg *sync.WaitGroup, filePath, outPath string) {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
-			fmt.Println("Error decoding file:", err)
+			if token != nil {
+				fmt.Printf("Error decoding file %s: %s\n", filePath, err)
+			}
 			break
+		} else if *debugFlag > 2 {
+			fmt.Printf("Decoded a token\n")
 		}
 
 		switch se := token.(type) {
@@ -63,6 +72,15 @@ func processFile(wg *sync.WaitGroup, filePath, outPath string) {
 							defer wg.Done()
 							saveMMSAttachment(apart, adate, anOutPath)
 						}(part, mms.Date, outPath)
+					} else if contentType == "application/vnd.gsma.botmessage.v1.0+json" {
+						if *debugFlag > 2 {
+							data, err := base64.StdEncoding.DecodeString(part.Data)
+							if err != nil {
+								fmt.Println("DEBUG: Error decoding attachment data:", err)
+							} else {
+								fmt.Printf("DEBUG: Data:\n%s\n", data)
+							}
+						}
 					} else if contentType != "text/plain" && contentType != "application/smil" {
 						fmt.Printf("  Unknown: %s\n", part.ContentType)
 					}
@@ -152,8 +170,8 @@ func saveMMSAttachment(part types.MMSPart, date, outPath string) {
 		if oStat != nil {
 			if oStat.IsDir() {
 				fmt.Printf("Error: Output path %s is an existing directory\n", oFile)
-				// } else {
-				// 	fmt.Printf("Output path %s already exists\n", oFile)
+			} else if *debugFlag > 1 {
+				fmt.Printf("DEBUG: Output path %s already exists\n", oFile)
 			}
 			return
 		}
@@ -192,6 +210,8 @@ func processDirectory(wg *sync.WaitGroup, inDirPath, outDirPath string) {
 		if !entry.IsDir() {
 			if strings.HasPrefix(fname, "sms-") && strings.HasSuffix(fname, ".xml") {
 				processFile(wg, apath, outDirPath)
+			} else if *debugFlag > 1 {
+				fmt.Println("DEBUG: Skipping", entry)
 			}
 		}
 		return nil
@@ -202,13 +222,14 @@ func processDirectory(wg *sync.WaitGroup, inDirPath, outDirPath string) {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Println("Usage: go run main.go <file_or_directory_path> <output_dir>")
+	flag.Parse()
+	if flag.NArg() < 2 {
+		fmt.Println("Usage: sbr [-d 0,1,2,3] <file_or_directory_path> <output_dir>")
 		os.Exit(1)
 	}
 
-	inPath := os.Args[1]
-	outPath := os.Args[2]
+	inPath := flag.Arg(0)
+	outPath := flag.Arg(1)
 	inPathInfo, err := os.Stat(inPath)
 	if err != nil {
 		log.Fatalf("Error accessing path %s: %v\n", inPath, err)
